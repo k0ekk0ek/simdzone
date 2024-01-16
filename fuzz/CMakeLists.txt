@@ -1,0 +1,6 @@
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+  add_executable(zone-fuzzer fuzzer.c)
+  target_compile_options(zone-fuzzer PUBLIC -fsanitize=fuzzer)
+  target_link_options(zone-fuzzer PUBLIC -fsanitize=fuzzer)
+  target_link_libraries(zone-fuzzer PRIVATE zone)
+endif()

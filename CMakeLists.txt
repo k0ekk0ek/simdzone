@@ -44,7 +44,11 @@ endif()
 # Building the testing tree is enabled by including CTest, but as it is not
 # strictly required to build the product itself, switch to off by default.
 option(BUILD_TESTING "Build the testing tree." OFF)
+option(BUILD_FUZZING "Build the fuzz target." OFF)
 option(BUILD_DOCUMENTATION "Build documentation." OFF)
+
+#set(SANITIZE "" CACHE STRING "Sanitizers to enable for the build.")
+set(ANALYZER "" CACHE STRING "Analyzer to enable during build.")
 
 if(CMAKE_VERSION VERSION_LESS 3.20)
   # CMAKE_<LANG>_BYTE_ORDER was added in version 3.20. Mimic the option in
@@ -62,6 +66,27 @@ include(CheckCCompilerFlag)
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 include(CTest)
+
+if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  if(DEFINED SANITIZE)
+    string(REGEX REPLACE " " "" sanitizers "${SANITIZE}")
+    string(REGEX REPLACE "[,;]+" ";" sanitizers "${sanitizers}")
+    list(FILTER sanitizers INCLUDE REGEX "^(address|undefined|leak)$")
+  elseif(BUILD_FUZZING AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(sanitizers "address;undefined;leak")
+  endif()
+
+  if(sanitizers)
+    if("address" IN_LIST sanitizers)
+      add_compile_options(-fno-omit-frame-pointer)
+      add_link_options(-fno-omit-frame-pointer)
+    endif()
+    string(JOIN "," sanitize ${sanitizers})
+    add_compile_options(-fsanitize=${sanitize})
+    add_link_options(-fsanitize=${sanitize})
+    message(STATUS "Sanitizers: ${sanitize}")
+  endif()
+endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
   add_compile_options(
@@ -81,7 +106,6 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
   add_compile_options(/W3)
 endif()
 
-set(ANALYZER "" CACHE STRING "Analyzer to enable on the build.")
 if(ANALYZER)
   # GCC and Visual Studio offer builtin analyzers. Clang supports static
   # analysis through separate tools, e.g. Clang-Tidy, which can be used in
@@ -97,7 +121,7 @@ if(ANALYZER)
   if(ANALYZER STREQUAL "clang-tidy")
     # Clang-Tidy is an extensible tool that offers more than static analysis.
     # https://clang.llvm.org/extra/clang-tidy/checks/list.html
-    message(STATUS "Enabling analyzer: clang-tidy")
+    message(STATUS "Analyzer: clang-tidy")
     set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=-*,clang-analyzer-*,-clang-analyzer-security.insecureAPI.strcpy,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling")
     if(CMAKE_COMPILE_WARNING_AS_ERROR)
       set(CMAKE_C_CLANG_TIDY "${CMAKE_C_CLANG_TIDY};--warnings-as-errors=*")
@@ -105,7 +129,7 @@ if(ANALYZER)
   elseif(ANALYZER STREQUAL "on")
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
       if(CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "10")
-        message(STATUS "Enabling analyzer: GCC")
+        message(STATUS "Analyzer: GCC")
         # -Wanalyzer-malloc-leak generates lots of false positives
         add_compile_options(-fanalyzer -Wno-analyzer-malloc-leak)
       endif()
@@ -113,27 +137,7 @@ if(ANALYZER)
   endif()
 endif()
 
-set(SANITIZER "" CACHE STRING "Sanitizers to enable on the build.")
-if(SANITIZER)
-  string(REGEX REPLACE " " "" SANITIZER "${SANITIZER}")
-  string(REGEX REPLACE "[,;]+" ";" SANITIZER "${SANITIZER}")
-  foreach(san ${SANITIZER})
-    if(san STREQUAL "address")
-      add_compile_options("-fno-omit-frame-pointer")
-      add_link_options("-fno-omit-frame-pointer")
-    endif()
-    if(san AND NOT san STREQUAL "none")
-      message(STATUS "Enabling sanitizer: ${san}")
-      add_compile_options("-fsanitize=${san}")
-      add_link_options("-fsanitize=${san}")
-    endif()
-  endforeach()
-endif()
-
 add_library(zone STATIC)
-if(WIN32)
-  target_link_libraries(zone INTERFACE ws2_32)
-endif()
 
 generate_export_header(
   zone BASE_NAME ZONE EXPORT_FILE_NAME include/zone/export.h)
@@ -231,6 +235,10 @@ configure_file(src/generic/endian.h.in generic/endian.h @ONLY)
 
 if(BUILD_TESTING)
   add_subdirectory(tests)
+endif()
+
+if(BUILD_FUZZING)
+  add_subdirectory(fuzz)
 endif()
 
 if(BUILD_DOCUMENTATION)
